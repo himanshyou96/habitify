@@ -17,8 +17,14 @@ class TodayDashboardScreen extends StatelessWidget {
     final provider = Provider.of<HabitProvider>(context);
 
     final total = provider.habits.length;
-    final completedCount =
-        provider.habits.where((h) => h.completed).length;
+    final today = DateTime.now();
+
+    final completedCount = provider.habits.where((h) {
+      return h.completedDates.any((d) =>
+      d.year == today.year &&
+          d.month == today.month &&
+          d.day == today.day);
+    }).length;
 
     return Scaffold(
       backgroundColor: AppColors.darkBackground,

@@ -11,117 +11,142 @@ class HabitProvider extends ChangeNotifier {
 
   Map<String, double> dailyProgress = {};
 
+  // =========================
+  // 🔥 COMPLETION RATE
+  // =========================
   double get completionRate {
     if (_habits.isEmpty) return 0;
     final completed = _habits.where((h) => h.completed).length;
     return completed / _habits.length;
   }
 
-  // 🏆 BADGE SYSTEM
-  String getStreakBadge(int streak) {
-    if (streak >= 100) return "👑 Legend";
-    if (streak >= 50) return "🔥 Elite";
-    if (streak >= 30) return "💎 Pro";
-    if (streak >= 7) return "⚡ Rising";
-    return "🌱 Beginner";
-  }
-
+  // =========================
   // ➕ ADD
+  // =========================
   void addHabit(Habit habit) {
     _habits.add(habit);
     _updateDailyProgress();
-    saveHabits();
     notifyListeners();
+    saveHabits();
   }
 
+  // =========================
   // ❌ DELETE
+  // =========================
   void deleteHabit(int index) {
     _habits.removeAt(index);
     _updateDailyProgress();
-    saveHabits();
     notifyListeners();
+    saveHabits();
   }
 
-  // 🔥 FINAL TOGGLE WITH FREEZE
+  // =========================
+  // 🔥 TOGGLE (FIXED + SAFE)
+  // =========================
   void toggleHabit(int index) {
     final habit = _habits[index];
+
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    // 🔁 TOGGLE
-    habit.completed = !habit.completed;
+    final alreadyDoneToday = habit.completedDates.any((d) =>
+    d.year == today.year &&
+        d.month == today.month &&
+        d.day == today.day);
 
-    if (habit.completed) {
-      // ✅ prevent duplicate date
-      if (!habit.completedDates.any((d) =>
-      d.year == today.year &&
-          d.month == today.month &&
-          d.day == today.day)) {
-        habit.completedDates.add(today);
-      }
+    if (!alreadyDoneToday) {
+      // ✅ MARK COMPLETE
+      habit.completed = true;
+      habit.completedDates.add(today);
 
-      if (habit.lastCompletedDate != null) {
-        final last = habit.lastCompletedDate!;
-        final lastDate = DateTime(last.year, last.month, last.day);
+      // Previous completion date (before adding today)
+      final prevDates = habit.completedDates
+          .where((d) => d.isBefore(today))
+          .toList()
+        ..sort();
 
-        final diff = today.difference(lastDate).inDays;
+      final prevDate = prevDates.isNotEmpty ? prevDates.last : null;
 
+      if (prevDate != null) {
+        final diff = today.difference(prevDate).inDays;
         if (diff == 1) {
-          // 🔥 CONTINUE STREAK
-          habit.streak++;
-        } else if (diff > 1) {
-          // ❌ MISSED DAYS
-
-          if (habit.freezeCount > 0) {
-            // 🧊 USE FREEZE
-            habit.freezeCount--;
-
-            debugPrint("❄️ Freeze used. Left: ${habit.freezeCount}");
-
-            // streak remains SAME
-          } else {
-            // 💥 RESET
-            habit.streak = 1;
-          }
+          habit.streak++;       // consecutive day
+        } else {
+          habit.streak = 1;     // streak broke
         }
       } else {
-        // 🆕 FIRST TIME
-        habit.streak = 1;
+        habit.streak = 1;       // first ever completion
       }
 
       habit.lastCompletedDate = today;
+
     } else {
       // ❌ UNDO
+      habit.completed = false;
+
       habit.completedDates.removeWhere((d) =>
       d.year == today.year &&
           d.month == today.month &&
           d.day == today.day);
 
-      if (habit.streak > 0) habit.streak--;
+      // Restore lastCompletedDate to previous date
+      final prevDates = habit.completedDates
+          .where((d) => d.isBefore(today))
+          .toList()
+        ..sort();
+
+      habit.lastCompletedDate =
+      prevDates.isNotEmpty ? prevDates.last : null;
+
+      // Restore streak count
+      habit.streak = habit.completedDates.length > 0
+          ? habit.streak  // keep existing streak (wasn't today's responsibility)
+          : 0;
     }
 
     _updateDailyProgress();
-    saveHabits();
     notifyListeners();
+    saveHabits();
   }
 
+  // =========================
   // 📊 DAILY PROGRESS
+  // =========================
   void _updateDailyProgress() {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    int completedToday = 0;
+
+    for (var habit in _habits) {
+      if (habit.completedDates.any((d) =>
+      d.year == today.year &&
+          d.month == today.month &&
+          d.day == today.day)) {
+        completedToday++;
+      }
+    }
 
     final key =
-        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+        "${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
 
-    dailyProgress[key] = completionRate;
+    dailyProgress[key] =
+    _habits.isEmpty ? 0 : completedToday / _habits.length;
   }
 
-  // 📈 WEEK GRAPH
+  // =========================
+  // 📈 WEEKLY GRAPH
+  // =========================
   List<FlSpot> getWeeklySpots() {
     final now = DateTime.now();
     List<FlSpot> spots = [];
 
     for (int i = 6; i >= 0; i--) {
-      final day = now.subtract(Duration(days: i));
+      final day = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: i));
 
       final key =
           "${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}";
@@ -136,44 +161,9 @@ class HabitProvider extends ChangeNotifier {
     return spots;
   }
 
-  // 💾 SAVE
-  Future<void> saveHabits() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final habitData =
-    _habits.map((h) => jsonEncode(h.toJson())).toList();
-
-    await prefs.setStringList('habits', habitData);
-
-    await prefs.setString(
-      'dailyProgress',
-      jsonEncode(dailyProgress),
-    );
-  }
-
-  // 📂 LOAD
-  Future<void> loadHabits() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final habitData = prefs.getStringList('habits');
-
-    if (habitData != null) {
-      _habits = habitData
-          .map((e) => Habit.fromJson(jsonDecode(e)))
-          .toList();
-    }
-
-    final progressData = prefs.getString('dailyProgress');
-
-    if (progressData != null) {
-      dailyProgress =
-      Map<String, double>.from(jsonDecode(progressData));
-    }
-
-    notifyListeners();
-  }
-
-  // 🔥 DAILY RESET (FINAL FIXED)
+  // =========================
+  // 🔄 DAILY RESET (IMPORTANT)
+  // =========================
   void resetDailyHabits() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -187,7 +177,6 @@ class HabitProvider extends ChangeNotifier {
           last.day,
         );
 
-        // ❌ अगर आज नहीं है → reset
         if (lastDate.year != today.year ||
             lastDate.month != today.month ||
             lastDate.day != today.day) {
@@ -200,5 +189,46 @@ class HabitProvider extends ChangeNotifier {
 
     notifyListeners();
     saveHabits();
+  }
+
+  // =========================
+  // 💾 SAVE
+  // =========================
+  Future<void> saveHabits() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final data =
+    _habits.map((h) => jsonEncode(h.toJson())).toList();
+
+    await prefs.setStringList('habits', data);
+
+    await prefs.setString(
+      'dailyProgress',
+      jsonEncode(dailyProgress),
+    );
+  }
+
+  // =========================
+  // 📂 LOAD
+  // =========================
+  Future<void> loadHabits() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final data = prefs.getStringList('habits');
+
+    if (data != null) {
+      _habits = data
+          .map((e) => Habit.fromJson(jsonDecode(e)))
+          .toList();
+    }
+
+    final progressData = prefs.getString('dailyProgress');
+
+    if (progressData != null) {
+      dailyProgress =
+      Map<String, double>.from(jsonDecode(progressData));
+    }
+
+    notifyListeners();
   }
 }
